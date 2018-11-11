@@ -11,12 +11,16 @@ import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.types.DataTypes;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+
 import static com.kpi.LabHelper.*;
 import static org.apache.spark.sql.functions.callUDF;
 import static org.apache.spark.sql.functions.col;
 
 public class DblpToAcmMapper {
-    public static void main(String[] args) {
+    public static void main(String[] args) throws Exception {
         final SparkSession sparkSession = SparkSession.builder()
                 .appName(APP_NAME)
                 .master(MASTER)
@@ -25,8 +29,8 @@ public class DblpToAcmMapper {
 
         final DataFrameReader dataFrameReader = sparkSession.read();
         dataFrameReader.option("header", "true");
-        final Dataset<Row> acmDataSet = dataFrameReader.csv(ACM_CSV).filter("year < 2000");
-        final Dataset<Row> dblp2DataSet = dataFrameReader.csv(DBLP2_CSV).filter("year < 2000");
+        final Dataset<Row> acmDataSet = readDataset(ACM_CSV, dataFrameReader);
+        final Dataset<Row> dblp2DataSet = readDataset(DBLP2_CSV, dataFrameReader);
 
         Tokenizer tokenizer = new Tokenizer().setInputCol("title").setOutputCol("words");
         HashingTF hashingTF = new HashingTF()
@@ -55,10 +59,13 @@ public class DblpToAcmMapper {
         sparkSession.udf().register(
                 "distance", (Vector f1, Vector f2) -> cosSim(f1.toArray(), f2.toArray()), DataTypes.DoubleType);
 
-        merged.withColumn("dist", callUDF("distance", col("features"), col("dblp2_features")))
+        Dataset<Row> resultDataset = merged.withColumn("dist", callUDF("distance", col("features"), col("dblp2_features")))
                 .select("idDBLP2", "idACM", "dist")
-                .filter("dist > 0.5")
-                .show(false);
+                .filter("dist > 0.5");
+
+        resultDataset.show();
+
+        //writeResultDataset(resultDataset);
     }
 
     private static Double cosSim(double[] vector1, double[] vector2) {
@@ -76,6 +83,19 @@ public class DblpToAcmMapper {
         }
 
         return result1 / (Math.sqrt(result2) * Math.sqrt(result3));
+    }
 
+    private static Dataset<Row> readDataset(final String filePath, final DataFrameReader dataFrameReader) {
+        return dataFrameReader.csv(filePath);
+//                .filter(col("year").$less("2000")
+//                .or(col("year").contains("")));
+    }
+
+    private static void writeResultDataset(final Dataset<Row> resultDataset) throws IOException {
+        BufferedWriter writer = new BufferedWriter(new FileWriter("src/main/resources/result.csv"));
+
+        for (Row row : resultDataset.collectAsList())
+            writer.write(row.getString(0) + CSV_SEPARATOR + row.get(1) + "\n");
+        writer.close();
     }
 }
